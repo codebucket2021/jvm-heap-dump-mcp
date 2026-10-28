@@ -1,13 +1,15 @@
 package com.github.djaler.jvmheapdumpmcp.mat
 
 import com.github.djaler.jvmheapdumpmcp.model.*
+import org.eclipse.mat.inspections.FindLeaksQuery.SuspectsResultTable
 import org.eclipse.mat.query.IContextObject
-import org.eclipse.mat.query.IResultTable
+import org.eclipse.mat.query.IResultPie
 import org.eclipse.mat.query.IResultTree
 import org.eclipse.mat.query.results.TextResult
 import org.eclipse.mat.report.QuerySpec
 import org.eclipse.mat.report.SectionSpec
 import org.eclipse.mat.snapshot.ISnapshot
+import org.eclipse.mat.snapshot.UnreachableObjectsHistogram
 import org.eclipse.mat.snapshot.model.IInstance
 import org.eclipse.mat.snapshot.model.IObject
 import org.eclipse.mat.snapshot.model.IObjectArray
@@ -39,32 +41,37 @@ object MatFacade {
     }
 
     // -------------------------------------------------------------------------
-    // Leak suspects (via MAT's "leakhunter" query)
+    // Leak suspects (via MAT's "find_leaks" and "leakhunter" queries)
     // -------------------------------------------------------------------------
 
+    /**
+     * `find_leaks` yields the suspects with their retained sizes; `leakhunter` (the Leak Suspects
+     * report) yields one section per suspect, in the same order, with MAT's textual description.
+     */
     fun getLeakSuspects(snapshot: ISnapshot): List<LeakSuspect> {
-        val result = try {
-            SnapshotQuery.lookup("find_leaks", snapshot)
-                ?.execute(NoOpProgress)
+        val (records, report) = try {
+            val table = SnapshotQuery.lookup("find_leaks", snapshot)?.execute(NoOpProgress) as? SuspectsResultTable
+            val report = SnapshotQuery.lookup("leakhunter", snapshot)?.execute(NoOpProgress)
+            (table?.data?.toList() ?: emptyList()) to report
         } catch (e: Exception) {
             return listOf(LeakSuspect("Could not run leak hunter: ${e.message}", 0L, "unknown"))
-        } ?: return emptyList()
+        }
 
-        return when (result) {
-            is TextResult -> listOf(LeakSuspect(result.text, 0L, "info"))
-            is SectionSpec -> result.children.filterIsInstance<QuerySpec>().mapNotNull { spec ->
-                val specResult = spec.result
-                if (specResult is TextResult) {
-                    LeakSuspect(
-                        description = spec.name ?: "Suspect",
-                        retainedHeap = 0L,
-                        probability = "high",
-                        detail = specResult.text,
-                    )
-                } else null
-            }
-
-            else -> emptyList()
+        if (report is TextResult) return listOf(LeakSuspect(MatQueries.htmlToText(report.text), 0L, "info"))
+        // Children: an overview pie, then one part per "Problem Suspect N" / "Hint N".
+        val sections = (report as? SectionSpec)?.children?.filterIsInstance<QuerySpec>()
+            ?.filter { it.result !is IResultPie } ?: emptyList()
+        var suspectIndex = 0
+        return sections.map { section ->
+            val texts = MatQueries.render(snapshot, section, MatRenderOptions(limit = 10)).mapNotNull { it.text }
+            // Hint sections (e.g. about the dominator tree) have no find_leaks record of their own.
+            val record = if (section.name.startsWith("Hint")) null else records.getOrNull(suspectIndex++)
+            LeakSuspect(
+                description = texts.firstOrNull() ?: section.name,
+                retainedHeap = record?.suspectRetained ?: 0L,
+                probability = section.name,
+                detail = texts.drop(1).joinToString("\n\n").ifEmpty { null },
+            )
         }
     }
 
@@ -331,27 +338,34 @@ object MatFacade {
 
     fun executeOql(snapshot: ISnapshot, query: String, limit: Int): OqlResult {
         val result = SnapshotQuery.parse("oql", snapshot)
-            .setArgument("queryString", query)
+            .setArgument("queryString", MatQueries.escapeNonAsciiLiterals(query))
             .execute(NoOpProgress)
 
-        return when (result) {
-            is IResultTable -> {
-                val cols = result.columns.map { it.label }
-                val rows = (0 until minOf(result.rowCount, limit)).map { i ->
-                    val row = result.getRow(i)
-                    cols.indices.map { c -> result.getColumnValue(row, c)?.toString() ?: "" }
-                }
-                OqlResult(
-                    query = query,
-                    columns = cols,
-                    rows = rows,
-                    truncated = result.rowCount > limit,
-                )
-            }
+        // Projections give tables; `SELECT * FROM ...` gives an object tree; no match gives text.
+        val part = MatQueries.render(snapshot, result, MatRenderOptions(limit = limit)).first()
+        part.text?.let { return OqlResult(query, listOf("result"), listOf(listOf(it))) }
 
-            is TextResult -> OqlResult(query, listOf("result"), listOf(listOf(result.text)))
-            else -> OqlResult(query, emptyList(), emptyList())
-        }
+        val withIds = part.rows.any { it.objectId != null }
+        return OqlResult(
+            query = query,
+            columns = part.columns + if (withIds) listOf("Object ID") else emptyList(),
+            rows = part.rows.map { row -> row.rawValues + if (withIds) listOf(row.objectId?.toString() ?: "") else emptyList() },
+            truncated = part.totalRows > part.rows.size,
+        )
+    }
+
+    // -------------------------------------------------------------------------
+    // Unreachable objects
+    // -------------------------------------------------------------------------
+
+    /** What MAT discarded as unreachable while parsing, or null if nothing was discarded. */
+    fun getUnreachableSummary(snapshot: ISnapshot): UnreachableSummary? {
+        val histogram = snapshot.snapshotInfo.getProperty(UnreachableObjectsHistogram::class.java.name)
+            as? UnreachableObjectsHistogram ?: return null
+        return UnreachableSummary(
+            objectCount = histogram.records.sumOf { it.objectCount.toLong() },
+            shallowHeap = histogram.records.sumOf { it.shallowHeapSize },
+        )
     }
 
     // -------------------------------------------------------------------------
@@ -905,7 +919,7 @@ object MatFacade {
     // Utilities
     // -------------------------------------------------------------------------
 
-    private object NoOpProgress : IProgressListener {
+    internal object NoOpProgress : IProgressListener {
         override fun beginTask(name: String?, totalWork: Int) {}
         override fun done() {}
         override fun isCanceled(): Boolean = false

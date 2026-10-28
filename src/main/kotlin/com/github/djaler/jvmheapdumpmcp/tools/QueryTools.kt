@@ -11,8 +11,12 @@ fun Server.registerQueryTools() {
             description = """
                 Executes an OQL (Object Query Language) query against the heap dump.
                 OQL is similar to SQL but operates on heap objects.
-                Example: SELECT * FROM java.util.HashMap WHERE size > 1000
-                Example: SELECT s.value.toString() FROM java.lang.String s
+                Example: SELECT * FROM java.util.HashMap h WHERE h.size > 1000
+                Example: SELECT toString(s), s.@retainedHeapSize FROM java.lang.String s
+                Example: SELECT toString(t.name), t.threadStatus FROM INSTANCEOF java.lang.Thread t
+                `SELECT *` returns objects (with Object IDs usable by the other tools); projections return columns.
+                MAT shows non-ASCII text escaped as \uXXXX; results are unescaped, and non-ASCII characters in
+                LIKE "..." / = "..." literals are escaped automatically, so e.g. LIKE ".*中文.*" works.
                 Results are returned as a table. Use limit to avoid overwhelming output.
             """.trimIndent(),
             schema = toolSchema(

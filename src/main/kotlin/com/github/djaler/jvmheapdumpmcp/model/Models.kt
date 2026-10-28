@@ -110,6 +110,82 @@ data class SessionInfo(
     val path: String,
     val openedAt: String,
     val heapSizeBytes: Long,
+    val keepUnreachable: Boolean = false,
+)
+
+/** Objects MAT discarded as unreachable while parsing (empty when they were kept). */
+@Serializable
+data class UnreachableSummary(
+    val objectCount: Long,
+    val shallowHeap: Long,
+)
+
+/** A MAT query as registered in its query registry (the commands of `eclipsec -command=`). */
+@Serializable
+data class MatQueryInfo(
+    val command: String,
+    val name: String,
+    val category: String?,
+    val description: String?,
+    val usage: String,
+    val arguments: List<MatQueryArgument> = emptyList(),
+)
+
+@Serializable
+data class MatQueryArgument(
+    val name: String,
+    val flag: String?,
+    val type: String,
+    val mandatory: Boolean,
+    val multiple: Boolean,
+    val defaultValue: String?,
+    val help: String?,
+)
+
+/** How to refine a table/tree result — mirrors the rendering params of MAT reports. */
+data class MatRenderOptions(
+    val limit: Int = 100,
+    val expandDepth: Int = 0,
+    val retained: String? = null,
+    val sortColumn: String? = null,
+    val sortAscending: Boolean = false,
+    val filters: Map<String, String> = emptyMap(),
+)
+
+/**
+ * One rendered part of a MAT query result. Tables and trees fill [columns]/[rows]; text and HTML
+ * results fill [text]. Composite results and report sections produce several parts.
+ */
+@Serializable
+data class MatResultPart(
+    val title: String?,
+    val resultType: String,
+    val columns: List<String> = emptyList(),
+    val rows: List<MatResultRow> = emptyList(),
+    val totalRows: Int = 0,
+    val text: String? = null,
+)
+
+@Serializable
+data class MatResultRow(
+    val values: List<String>,
+    val rawValues: List<String>,
+    val objectId: Int?,
+    val depth: Int = 0,
+)
+
+@Serializable
+data class MatReportInfo(
+    val id: String,
+    val name: String,
+    val description: String?,
+)
+
+@Serializable
+data class MatReportOutput(
+    val report: String,
+    val files: List<String>,
+    val entries: List<String>,
 )
 
 @Serializable

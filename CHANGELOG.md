@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Full Eclipse MAT query set: MAT's own `plugin.xml` descriptors (api, report, parser, hprof) are now registered at startup instead of three hand-written query entries, so all ~60 MAT queries, reports, renderers, name resolvers and collection extractors are available
+- `run_mat_query` tool — runs any MAT command line (`histogram`, `path2gc 0x…`, `group_by_value …`, `leakhunter`, `delta_histogram -baseline …`, `oql "…"`), refined like in MAT (default sort, formatting) with optional retained-size column, sort, column filters and tree expansion
+- `list_mat_queries` tool — lists all MAT queries by category with usage; detailed argument help per command
+- `export_mat_query` tool — writes all rows of a query result to CSV (raw values, object ids) without putting them into the conversation
+- `run_mat_report` tool — generates MAT reports like `ParseHeapDump`: `suspects`, `overview`, `top_components`, `query`, comparison reports (`baseline=` option) or a custom report definition XML
+- `open_heap_dump` option `keep_unreachable_objects` (MAT's `-keep_unreachable_objects`), parsed in a sibling `<name>_keep_unreachable` directory via hard link so the normal indexes are kept; the summary now reports the dump file size and the unreachable objects MAT discarded
+
+### Fixed
+
+- OQL `toString()`, `find_strings` and thread names returned empty values because MAT's class-specific name resolvers were not registered
+- `get_leak_suspects` always reported no suspects (`find_leaks` returns a table, not text); it now combines `find_leaks` sizes with the Leak Suspects descriptions
+- `execute_oql` returned nothing for object-list queries such as `SELECT * FROM …`; they now return rows with object ids
+- Non-ASCII text, which MAT renders as `\uXXXX`, is unescaped in results, and `execute_oql` escapes non-ASCII literals in `LIKE`/`=` so they can match
+- Added `org.eclipse.core.resources`, required by MAT's report renderer
+- Removed the duplicated "Used heap size" row in the `open_heap_dump` summary
+
 ## [0.2.0] - 2026-04-21
 
 ### Added

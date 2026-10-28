@@ -29,6 +29,22 @@ configurations {
     }
 }
 
+// Every MAT bundle ships its own root-level plugin.xml, so the shadow JAR keeps only one of them.
+// Copy each bundle's descriptor to mat-plugins/<bundle>/ so MatBootstrap can register all of them.
+val matPluginDescriptors by tasks.registering(Sync::class) {
+    into(layout.buildDirectory.dir("generated/mat-plugins"))
+    configurations["eclipseMat"].filter { it.name.startsWith("org.eclipse.mat.") }.forEach { jar ->
+        from(zipTree(jar)) {
+            include("plugin.xml", "plugin.properties")
+            into("mat-plugins/" + jar.name.substringBefore('_'))
+        }
+    }
+}
+
+sourceSets.main {
+    resources.srcDir(matPluginDescriptors)
+}
+
 dependencies {
     implementation(libs.mcp.sdk)
     implementation(libs.ktor.server.cio)
@@ -47,6 +63,10 @@ dependencies {
     implementation("org.eclipse.platform:org.eclipse.equinox.preferences:3.11.100")
     implementation("org.eclipse.platform:org.eclipse.equinox.registry:3.12.100")
     implementation("org.eclipse.platform:org.eclipse.osgi:3.20.0")
+
+    // MAT's report renderer and some queries call ResourcesPlugin.getEncoding() (falls back to the
+    // platform encoding without a workspace); the rest of the bundle and its dependencies are unused.
+    implementation("org.eclipse.platform:org.eclipse.core.resources:3.21.0") { isTransitive = false }
 
     testImplementation(kotlin("test"))
     testImplementation(libs.kotlinx.coroutines.core)

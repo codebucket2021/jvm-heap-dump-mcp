@@ -31,6 +31,7 @@ object McpServerFactory {
         server.registerCollectionTools()
         server.registerCompareTools()
         server.registerThreadLocalTools()
+        server.registerMatTools()
 
         return server
     }

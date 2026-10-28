@@ -1,14 +1,25 @@
 package com.github.djaler.jvmheapdumpmcp.mat
 
 import org.eclipse.core.runtime.ContributorFactorySimple
+import org.eclipse.core.runtime.IExtensionRegistry
 import org.eclipse.core.runtime.RegistryFactory
 import org.eclipse.core.runtime.content.IContentTypeManager
 import org.eclipse.core.runtime.spi.IRegistryProvider
 import org.eclipse.core.runtime.spi.RegistryStrategy
 import org.eclipse.mat.parser.internal.ParserPlugin
 import org.eclipse.mat.snapshot.SnapshotFactory
+import org.w3c.dom.Element
+import java.io.ByteArrayOutputStream
+import java.io.InputStreamReader
 import java.lang.reflect.Proxy
+import java.util.Enumeration
+import java.util.PropertyResourceBundle
+import java.util.ResourceBundle
 import java.util.logging.Logger
+import javax.xml.parsers.DocumentBuilderFactory
+import javax.xml.transform.TransformerFactory
+import javax.xml.transform.dom.DOMSource
+import javax.xml.transform.stream.StreamResult
 
 /**
  * Bootstraps Eclipse MAT for standalone (non-OSGi) operation.
@@ -20,7 +31,7 @@ import java.util.logging.Logger
  *
  * We bootstrap by:
  * 1. Creating a standalone [org.eclipse.core.internal.registry.ExtensionRegistry].
- * 2. Contributing plugin.xml-style XML fragments to register all necessary extensions.
+ * 2. Contributing MAT's own plugin.xml descriptors (see [registerPluginDescriptor]).
  * 3. Injecting the registry as the platform default via [RegistryFactory.setDefaultRegistryProvider].
  * 4. Force-initializing [SnapshotFactory] (triggering its static block).
  * 5. Injecting a [ParserPlugin] instance with the same registry via reflection.
@@ -49,51 +60,12 @@ object MatBootstrap {
 
         RegistryFactory.setDefaultRegistryProvider(IRegistryProvider { registry })
 
-        val matApiContributor = ContributorFactorySimple.createContributor("org.eclipse.mat.api")
-        val matParserContributor = ContributorFactorySimple.createContributor("org.eclipse.mat.parser")
-        val matHprofContributor = ContributorFactorySimple.createContributor("org.eclipse.mat.hprof")
-        val matReportContributor = ContributorFactorySimple.createContributor("org.eclipse.mat.report")
-
-        // 1. Register org.eclipse.mat.api.factory extension point and SnapshotFactoryImpl
-        registry.addContribution(
-            apiFactoryXml().byteInputStream(),
-            matApiContributor,
-            false,
-            null,
-            null,
-            null
-        )
-
-        // 2. Register the org.eclipse.mat.parser.parser extension point and HPROF parser
-        registry.addContribution(
-            hprofParserXml().byteInputStream(),
-            matParserContributor,
-            false,
-            null,
-            null,
-            null
-        )
-
-        // 3. Register the org.eclipse.mat.hprof.enhancer extension point (no enhancers needed,
-        //    but EnhancerRegistry.init() NPEs if the extension point is missing)
-        registry.addContribution(
-            hprofEnhancerXml().byteInputStream(),
-            matHprofContributor,
-            false,
-            null,
-            null,
-            null
-        )
-
-        // 4. Register org.eclipse.mat.report.query extension point (needed by QueryRegistry)
-        registry.addContribution(
-            reportQueryXml().byteInputStream(),
-            matReportContributor,
-            false,
-            null,
-            null,
-            null
-        )
+        // 1-4. Register MAT's own plugin.xml descriptors: extension points, the snapshot factory,
+        //      the HPROF parser, all queries, reports, renderers, name resolvers and
+        //      collection extractors — the same set the MAT application sees under OSGi.
+        for (bundle in MAT_BUNDLES) {
+            registerPluginDescriptor(registry, bundle)
+        }
 
         // 4. Inject IContentTypeManager so Platform.getContentTypeManager() returns non-null.
         //    SnapshotFactoryImpl.openSnapshot() calls it; if it returns null the NPE occurs.
@@ -122,60 +94,88 @@ object MatBootstrap {
         log.info("Eclipse MAT bootstrap complete")
     }
 
-    private fun apiFactoryXml() = """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <plugin>
-            <extension-point id="factory" name="MAT Snapshot Factory"/>
-            <extension-point id="nameResolver" name="MAT Class Specific Name Resolver"/>
-            <extension-point id="collectionExtractorProvider" name="MAT Collection Extractor Provider"/>
-            <extension-point id="requestResolver" name="MAT Request Detail Resolver"/>
-            <extension-point id="threadResolver" name="MAT Thread Detail Resolver"/>
-            <extension-point id="ticketResolver" name="MAT Trouble Ticket Resolver"/>
-            <extension point="org.eclipse.mat.api.factory">
-                <factory impl="org.eclipse.mat.parser.internal.SnapshotFactoryImpl"/>
-            </extension>
-        </plugin>
-    """.trimIndent()
+    /** MAT bundles whose descriptors are copied to `mat-plugins/<bundle>/` by the build. */
+    private val MAT_BUNDLES = listOf(
+        "org.eclipse.mat.report",
+        "org.eclipse.mat.api",
+        "org.eclipse.mat.parser",
+        "org.eclipse.mat.hprof",
+    )
 
-    private fun reportQueryXml() = """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <plugin>
-            <extension-point id="query" name="MAT Report Query"/>
-            <extension-point id="report" name="MAT Report"/>
-            <extension-point id="renderer" name="MAT Renderer"/>
-            <extension point="org.eclipse.mat.report.query">
-                <query impl="org.eclipse.mat.inspections.OQLQuery"/>
-            </extension>
-            <extension point="org.eclipse.mat.report.query">
-                <query impl="org.eclipse.mat.inspections.FindLeaksQuery"/>
-            </extension>
-            <extension point="org.eclipse.mat.report.query">
-                <query impl="org.eclipse.mat.inspections.threads.ThreadOverviewQuery"/>
-            </extension>
-        </plugin>
-    """.trimIndent()
+    /** Attributes in MAT's plugin.xml files that name an implementation class. */
+    private val CLASS_ATTRIBUTES = listOf("impl", "class", "indexBuilder", "objectReader")
 
-    private fun hprofEnhancerXml() = """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <plugin>
-            <extension-point id="enhancer" name="MAT HPROF Enhancer"/>
-        </plugin>
-    """.trimIndent()
+    private val bundleTranslations = mutableMapOf<String, ResourceBundle>()
 
-    private fun hprofParserXml() = """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <plugin>
-            <extension-point id="parser" name="MAT Heap Dump Parser"/>
-            <extension point="org.eclipse.mat.parser.parser">
-                <parser
-                    id="org.eclipse.mat.hprof.parser"
-                    name="HPROF"
-                    fileExtension="hprof,bin"
-                    indexBuilder="org.eclipse.mat.hprof.HprofIndexBuilder"
-                    objectReader="org.eclipse.mat.hprof.HprofHeapObjectReader"/>
-            </extension>
-        </plugin>
-    """.trimIndent()
+    /**
+     * Translates a `%key [default]` value with [bundle]'s plugin.properties, as Eclipse does for
+     * resources of that bundle (e.g. the names in MAT's report definitions). Other values are
+     * returned unchanged.
+     */
+    fun translate(bundle: String, value: String): String {
+        if (!value.startsWith("%")) return value
+        val key = value.substring(1)
+        return bundleTranslations[bundle]?.getString(key) ?: key.substringAfter(' ', key)
+    }
+
+    /**
+     * Contributes a bundle's original plugin.xml under the bundle's symbolic name, so relative
+     * extension point ids resolve exactly as they do under OSGi. `%key` labels are translated with
+     * the bundle's plugin.properties. Extensions to non-MAT points (content types, applications,
+     * preference pages) and elements whose class is not on the classpath are dropped.
+     */
+    private fun registerPluginDescriptor(registry: IExtensionRegistry, bundle: String) {
+        val loader = MatBootstrap::class.java.classLoader
+        val xml = loader.getResourceAsStream("mat-plugins/$bundle/plugin.xml")
+        if (xml == null) {
+            log.warning("plugin.xml for $bundle not found on the classpath — its extensions are unavailable")
+            return
+        }
+        val doc = xml.use { DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(it) }
+        val root = doc.documentElement
+        for (extension in root.childElements()) {
+            val point = extension.getAttribute("point")
+            if (extension.tagName == "extension" && !point.startsWith("org.eclipse.mat.")) {
+                root.removeChild(extension)
+                continue
+            }
+            for (element in extension.childElements()) {
+                val missing = CLASS_ATTRIBUTES.map { element.getAttribute(it) }.firstOrNull { it.isNotEmpty() && !isLoadable(it) }
+                if (missing != null) {
+                    log.info("Skipping $bundle extension $point: class $missing is not available")
+                    extension.removeChild(element)
+                }
+            }
+        }
+
+        val out = ByteArrayOutputStream()
+        TransformerFactory.newInstance().newTransformer().transform(DOMSource(doc), StreamResult(out))
+        val translations = loader.getResourceAsStream("mat-plugins/$bundle/plugin.properties")
+            ?.use { PluginTranslations(PropertyResourceBundle(InputStreamReader(it, Charsets.ISO_8859_1))) }
+        translations?.let { bundleTranslations[bundle] = it }
+
+        registry.addContribution(
+            out.toByteArray().inputStream(),
+            ContributorFactorySimple.createContributor(bundle),
+            false,
+            bundle,
+            translations,
+            null
+        )
+    }
+
+    private fun Element.childElements(): List<Element> {
+        val nodes = childNodes
+        return (0 until nodes.length).map { nodes.item(it) }.filterIsInstance<Element>()
+    }
+
+    private fun isLoadable(className: String): Boolean =
+        try {
+            Class.forName(className, false, MatBootstrap::class.java.classLoader)
+            true
+        } catch (_: Throwable) {
+            false
+        }
 
     private fun triggerSnapshotFactoryInit() {
         try {
@@ -326,6 +326,8 @@ object MatBootstrap {
                 "loadClass" -> systemCl.loadClass(args[0] as String)
                 "getResource" -> systemCl.getResource(args[0] as String)
                 "getResources" -> systemCl.getResources(args[0] as String)
+                // FileLocator resolves bundle files (e.g. the CSS/JS of MAT's HTML reports) via getEntry.
+                "getEntry" -> systemCl.getResource((args[0] as String).removePrefix("/"))
                 else -> null
             }
         }
@@ -486,4 +488,17 @@ object MatBootstrap {
             log.warning("HprofPlugin injection failed: ${e.message}")
         }
     }
+}
+
+/**
+ * plugin.properties lookup with Eclipse's `%key default text` semantics: the registry passes the
+ * whole string after `%`, and a key missing from the properties falls back to the default text.
+ */
+private class PluginTranslations(private val properties: ResourceBundle) : ResourceBundle() {
+    override fun handleGetObject(key: String): Any {
+        val id = key.substringBefore(' ')
+        return if (properties.containsKey(id)) properties.getString(id) else key.substringAfter(' ', id)
+    }
+
+    override fun getKeys(): Enumeration<String> = properties.keys
 }

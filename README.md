@@ -52,7 +52,7 @@ The agent will use the tools to:
 
 | Tool | Description |
 |------|-------------|
-| `open_heap_dump` | Open a .hprof file, returns session ID + heap summary |
+| `open_heap_dump` | Open a .hprof file, returns session ID + heap summary; `keep_unreachable_objects=true` keeps garbage objects queryable |
 | `close_heap_dump` | Close session and free memory |
 | `list_sessions` | List open sessions |
 | `get_heap_summary` | Heap size, object/class counts, GC roots |
@@ -69,6 +69,18 @@ The agent will use the tools to:
 | `execute_oql` | Run OQL queries (SQL-like for heap objects) |
 | `find_strings` | Search String objects by regex |
 | `inspect_array` | View array contents (byte[], int[], Object[], etc.) |
+| `list_mat_queries` | All Eclipse MAT queries with usage and argument help |
+| `run_mat_query` | Run any MAT command (`unreachable_objects`, `path2gc`, `group_by_value`, `delta_histogram -baseline …`, …) |
+| `export_mat_query` | Write all rows of a MAT query / OQL result to CSV |
+| `run_mat_report` | Generate MAT reports (Leak Suspects, System Overview, Top Components, single query, custom report XML) |
+
+### Eclipse MAT coverage
+
+All queries MAT registers are available through `run_mat_query`, run by MAT's own engine with the
+same result refinement as MAT (sorting, formatting, retained-size columns). The exceptions are
+`bundle_registry` (only meaningful for Eclipse/OSGi application dumps, as in MAT itself),
+`comparetablesquery` (compares tables previously opened in the MAT UI) and `default_report` /
+`comparison_report`, whose job `run_mat_report` does.
 
 ## Updating
 

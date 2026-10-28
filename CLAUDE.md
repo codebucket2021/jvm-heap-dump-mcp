@@ -19,17 +19,20 @@ com.github.djaler.jvmheapdumpmcp
   ├── Main.kt              — Entry point, stdio transport
   ├── server/              — MCP server wiring
   │   └── McpServerFactory — Tool registration
-  ├── tools/               — MCP tool handlers (one file per group, 22 tools total)
+  ├── tools/               — MCP tool handlers (one file per group, 26 tools total)
   ├── mat/                 — Eclipse MAT integration (isolated)
-  │   ├── MatBootstrap     — OSGi context mocking for standalone MAT
+  │   ├── MatBootstrap     — OSGi context mocking for standalone MAT; registers MAT's plugin.xml descriptors
   │   ├── SnapshotManager  — ISnapshot session cache
-  │   └── MatFacade        — Kotlin facade over MAT API
+  │   ├── MatFacade        — Kotlin facade over MAT API
+  │   ├── MatQueries       — runs/renders any registered MAT query (RefinedResultBuilder)
+  │   └── MatReports       — runs MAT report specs (TestSuite) without OSGi bundle lookups
   └── model/               — Data classes for tool results
 ```
 
 ### Key Design Decisions
 
 - **MAT runs standalone** without Eclipse/OSGi — we mock the OSGi context (approach from Eclipse JIFA)
+- **MAT's own plugin.xml files are the registry source** — the build copies each MAT bundle's `plugin.xml`/`plugin.properties` to `mat-plugins/<bundle>/` (the shadow JAR would otherwise keep only one root `plugin.xml`); don't hand-write extension XML
 - **Session-based**: `open_heap_dump` returns a session ID; all tools use it to reference the cached `ISnapshot`
 - **All MAT interaction** goes through `MatFacade` — tools never touch MAT classes directly
 - **Tool results** are plain text (TextContent) formatted for LLM readability

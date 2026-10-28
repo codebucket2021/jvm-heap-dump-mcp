@@ -55,6 +55,9 @@ fun JsonObject?.getIntOrDefault(key: String, default: Int): Int = getInt(key) ?:
 
 fun JsonObject?.getStringOrDefault(key: String, default: String): String = getString(key) ?: default
 
+fun JsonObject?.getBooleanOrDefault(key: String, default: Boolean): Boolean =
+    this?.get(key)?.asString()?.toBooleanStrictOrNull() ?: default
+
 /**
  * Builds a ToolSchema (input schema) from a map of property-name to JSON schema object.
  */
@@ -76,6 +79,15 @@ fun stringProp(description: String): JsonObject = JsonObject(
 fun intProp(description: String, default: Int? = null): JsonObject {
     val map = mutableMapOf<String, JsonElement>(
         "type" to JsonPrimitive("integer"),
+        "description" to JsonPrimitive(description),
+    )
+    if (default != null) map["default"] = JsonPrimitive(default)
+    return JsonObject(map)
+}
+
+fun boolProp(description: String, default: Boolean? = null): JsonObject {
+    val map = mutableMapOf<String, JsonElement>(
+        "type" to JsonPrimitive("boolean"),
         "description" to JsonPrimitive(description),
     )
     if (default != null) map["default"] = JsonPrimitive(default)
